@@ -20,14 +20,13 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// outputC is checked below for a close() signal to stop the babysitter
+	// outputC is checked below for a close() signal
+	//  to stop the utility when the subcommand finishes
 	outputC := make(chan []byte)
 	errorC := make(chan error)
 
-	// start the babysat program
 	go babysit(command, []byte(killOn), outputC, errorC)
 
-	// forever wait for output, close, or error
 	for {
 		select {
 		case err := <-errorC:
@@ -44,7 +43,7 @@ func main() {
 
 func babysit(
 	command []string, killOn []byte, outputC chan []byte, errorC chan error) {
-	//nolint: gosec // this tool is run with locally a specified sub-command
+	//nolint: gosec // this tool is run locally, not a security risk
 	cmd := exec.Command(command[0], command[1:]...)
 	stdOut, err := cmd.StdoutPipe()
 	if err != nil {
@@ -63,7 +62,6 @@ func listenAndKill(
 	outputC chan []byte, errC chan error) {
 	for {
 		r := bufio.NewReader(stdOut)
-		// TODO: stop ignoring this isPrefix error-like bool
 		line, _, err := r.ReadLine()
 		if err != nil {
 			errC <- err
