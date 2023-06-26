@@ -14,6 +14,9 @@ import (
 func main() {
 	killOn, command, err := parseArgs()
 	if err != nil {
+		if err == gaveUsageErr {
+			return
+		}
 		log.Fatal(err)
 	}
 	// channels for getting back the output or err
@@ -27,13 +30,13 @@ func main() {
 	for {
 		select {
 		case err := <-errorC:
-			fmt.Printf("error: %s\n", err)
+			fmt.Printf("Error: %s\n", err)
 		case output, open := <-outputC:
 			if !open {
-				fmt.Println("outputC closed")
+				fmt.Println("Output closed")
 				return
 			}
-			fmt.Printf("output: %s", string(output))
+			fmt.Printf("Output: %s\n", string(output))
 		}
 	}
 }
@@ -69,7 +72,7 @@ func listenAndKill(
 		if !bytes.Contains(bytes.ToLower(line), bytes.ToLower(killOn)) {
 			continue
 		}
-		outputC <- []byte("BabySitter: found killOn string, sending kill")
+		outputC <- []byte("BabySitter: found kill_on string, sending kill signal")
 		if err := cmd.Process.Kill(); err != nil {
 			errC <- err
 		}
@@ -78,6 +81,8 @@ func listenAndKill(
 	}
 }
 
+var gaveUsageErr = fmt.Errorf("gave usage, exiting")
+
 func parseArgs() ([]byte, []string, error) {
 	var killOn string
 	var command []string
@@ -85,7 +90,7 @@ func parseArgs() ([]byte, []string, error) {
 		switch strings.ToLower(os.Args[i]) {
 		case "-help", "-h":
 			usage()
-			return nil, nil, nil
+			return nil, nil, gaveUsageErr
 		case "-kill_on", "-k":
 			killOn = os.Args[i+1]
 			i++
