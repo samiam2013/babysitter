@@ -14,19 +14,20 @@ import (
 func main() {
 	killOn, command, err := parseArgs()
 	if err != nil {
-		if err == gaveUsageErr {
+		if err == errGaveUsage {
 			return
 		}
 		log.Fatal(err)
 	}
-	// channels for getting back the output or err
-	outputC := make(chan []byte) // closed for internal "done" signaling
+
+	// outputC is checked below for a close() signal to stop the babysitter
+	outputC := make(chan []byte)
 	errorC := make(chan error)
 
 	// start the babysat program
 	go babysit(command, []byte(killOn), outputC, errorC)
 
-	// forever wait for a string to be handed back or a timeout
+	// forever wait for output, close, or error
 	for {
 		select {
 		case err := <-errorC:
@@ -81,7 +82,7 @@ func listenAndKill(
 	}
 }
 
-var gaveUsageErr = fmt.Errorf("gave usage, exiting")
+var errGaveUsage = fmt.Errorf("gave usage, exiting")
 
 func parseArgs() ([]byte, []string, error) {
 	var killOn string
@@ -89,8 +90,10 @@ func parseArgs() ([]byte, []string, error) {
 	for i := 0; i < len(os.Args); i++ {
 		switch strings.ToLower(os.Args[i]) {
 		case "-help", "-h":
-			usage()
-			return nil, nil, gaveUsageErr
+			fmt.Println(`Usage: babysitter [options] -- command [args]
+			-k, --kill_on <string>  String to kill on
+			-h, --help              Show this help`)
+			return nil, nil, errGaveUsage
 		case "-kill_on", "-k":
 			killOn = os.Args[i+1]
 			i++
@@ -100,10 +103,4 @@ func parseArgs() ([]byte, []string, error) {
 		}
 	}
 	return nil, nil, fmt.Errorf("no command specified")
-}
-
-func usage() {
-	fmt.Println(`Usage: babysitter [options] -- command [args]
-	-k, --kill_on <string>  String to kill on
-	-h, --help              Show this help`)
 }
