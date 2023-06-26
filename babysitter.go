@@ -12,36 +12,16 @@ import (
 )
 
 func main() {
-	var (
-		killOn  string
-		command []string
-	)
-	for i := 0; i < len(os.Args); i++ {
-		switch strings.ToLower(os.Args[i]) {
-		case "-help", "-h":
-			help()
-			return
-		case "-kill_on", "-k":
-			killOn = os.Args[i+1]
-			i++
-		case "--":
-			command = os.Args[i+1:]
-		}
-		if len(command) > 0 {
-			break
-		}
+	killOn, command, err := parseArgs()
+	if err != nil {
+		log.Fatal(err)
 	}
-	fmt.Println("killOn:", killOn)
-	fmt.Println("command:", command)
-	if len(command) == 0 {
-		log.Fatal("No command given")
-	}
-	// channel for getting back the output
+	// channels for getting back the output or err
+	outputC := make(chan []byte) // closed for internal "done" signaling
+	errorC := make(chan error)
 
 	// start the babysat program
-	outputC := make(chan []byte)
-	errorC := make(chan error)
-	go babysit(command, killOn, outputC, errorC)
+	go babysit(command, []byte(killOn), outputC, errorC)
 
 	// forever wait for a string to be handed back or a timeout
 	for {
@@ -53,14 +33,14 @@ func main() {
 				fmt.Println("outputC closed")
 				return
 			}
-			fmt.Printf("output: %s\n", string(output))
+			fmt.Printf("output: %s", string(output))
 		}
 	}
 }
 
-func babysit(command []string, killOn string, outputC chan []byte, errorC chan error) {
-	fmt.Println("babysitting:", command)
-
+func babysit(
+	command []string, killOn []byte, outputC chan []byte, errorC chan error) {
+	//nolint: gosec // this tool is run with locally a specified sub-command
 	cmd := exec.Command(command[0], command[1:]...)
 	stdOut, err := cmd.StdoutPipe()
 	if err != nil {
@@ -71,30 +51,53 @@ func babysit(command []string, killOn string, outputC chan []byte, errorC chan e
 		errorC <- err
 		return
 	}
-	go func(stdOut io.ReadCloser, outputC chan []byte, errC chan error) {
-		for {
-			r := bufio.NewReader(stdOut)
-			// TODO: why ignore this isPrefix?
-			line, _, err := r.ReadLine()
-			if err != nil {
-				errC <- err
-				return
-			}
-			fmt.Printf("line: %s\n", string(line))
-			if !bytes.Contains(bytes.ToLower(line), bytes.ToLower([]byte(killOn))) {
-				continue
-			}
-			outputC <- []byte("BabySitter: found killOn string, sending kill\n")
-			if err := cmd.Process.Kill(); err != nil {
-				errC <- err
-			}
-			close(outputC)
-			return
-		}
-	}(stdOut, outputC, errorC)
+	go listenAndKill(cmd, killOn, stdOut, outputC, errorC)
 }
 
-func help() {
+func listenAndKill(
+	cmd *exec.Cmd, killOn []byte, stdOut io.Reader,
+	outputC chan []byte, errC chan error) {
+	for {
+		r := bufio.NewReader(stdOut)
+		// TODO: stop ignoring this isPrefix error-like bool
+		line, _, err := r.ReadLine()
+		if err != nil {
+			errC <- err
+			return
+		}
+		outputC <- line
+		if !bytes.Contains(bytes.ToLower(line), bytes.ToLower(killOn)) {
+			continue
+		}
+		outputC <- []byte("BabySitter: found killOn string, sending kill")
+		if err := cmd.Process.Kill(); err != nil {
+			errC <- err
+		}
+		close(outputC)
+		return
+	}
+}
+
+func parseArgs() ([]byte, []string, error) {
+	var killOn string
+	var command []string
+	for i := 0; i < len(os.Args); i++ {
+		switch strings.ToLower(os.Args[i]) {
+		case "-help", "-h":
+			usage()
+			return nil, nil, nil
+		case "-kill_on", "-k":
+			killOn = os.Args[i+1]
+			i++
+		case "--":
+			command = os.Args[i+1:]
+			return []byte(killOn), command, nil
+		}
+	}
+	return nil, nil, fmt.Errorf("no command specified")
+}
+
+func usage() {
 	fmt.Println(`Usage: babysitter [options] -- command [args]
 	-k, --kill_on <string>  String to kill on
 	-h, --help              Show this help`)
