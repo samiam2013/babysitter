@@ -71,7 +71,7 @@ func listenAndKill(
 		if !bytes.Contains(bytes.ToLower(line), bytes.ToLower(killOn)) {
 			continue
 		}
-		outputC <- []byte("BabySitter: found kill_on string, sending kill signal")
+		outputC <- []byte("BabySitter: found string, sending kill signal")
 		if err := cmd.Process.Kill(); err != nil {
 			errC <- err
 		}
