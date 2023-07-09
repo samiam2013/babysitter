@@ -21,11 +21,8 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// outputC is checked below for a close() signal
-	//  to stop the utility when the subcommand finishes
 	outputC := make(chan []byte)
 	errorC := make(chan error)
-
 	go babysit(command, []byte(killOn), outputC, errorC)
 
 	for {
@@ -100,7 +97,7 @@ func readFrom(ctx context.Context, cancel context.CancelFunc,
 		outputC <- line
 
 		if bytes.Contains(bytes.ToLower(line), bytes.ToLower(killOn)) {
-			outputC <- []byte("BabySitter: found string, sending kill signal")
+			outputC <- []byte("Listener found string, sending kill signal")
 			if err := cmd.Process.Kill(); err != nil {
 				errC <- err
 			}
@@ -132,8 +129,6 @@ func parseArgs() ([]byte, []string, error) {
 	}
 	if len(killOn) == 0 {
 		return nil, nil, fmt.Errorf("no kill_on specified")
-	} else {
-		fmt.Println("kill_on:", killOn)
 	}
 	return nil, nil, fmt.Errorf("no command specified")
 }
