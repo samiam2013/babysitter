@@ -31,13 +31,13 @@ func main() {
 	for {
 		select {
 		case err := <-errorC:
-			fmt.Printf("Error: %s\n", err)
+			log.Fatal("Error from command: ", err)
 		case output, open := <-outputC:
 			if !open {
-				fmt.Println("Output closed")
+				log.Println("Output closed")
 				return
 			}
-			fmt.Printf("Output: %s\n", string(output))
+			log.Printf("Output: %s\n", string(output))
 		}
 	}
 }
