@@ -12,8 +12,18 @@ import (
 	"strings"
 )
 
+type watchedCommand struct {
+	cmdStrs  []string
+	cmd      *exec.Cmd
+	killOn   []byte
+	stdOut   io.Reader
+	stdErr   io.Reader
+	combOutC chan []byte
+	errorC   chan error
+}
+
 func main() {
-	killOn, command, err := parseArgs()
+	command, err := newWatchedCommand()
 	if err == errGaveUsage {
 		return
 	}
@@ -21,15 +31,13 @@ func main() {
 		log.Fatal(err)
 	}
 
-	outputC := make(chan []byte)
-	errorC := make(chan error)
-	go babysit(command, []byte(killOn), outputC, errorC)
+	go listenAndKill(command)
 
 	for {
 		select {
-		case err := <-errorC:
+		case err := <-command.errorC:
 			log.Fatal("Error from command: ", err)
-		case output, open := <-outputC:
+		case output, open := <-command.combOutC:
 			if !open {
 				log.Println("Output closed")
 				return
@@ -39,96 +47,91 @@ func main() {
 	}
 }
 
-func babysit(
-	command []string, killOn []byte, outputC chan []byte, errorC chan error) {
-	//nolint: gosec // this tool is run locally, not a security risk
-	cmd := exec.Command(command[0], command[1:]...)
-	stdOut, err := cmd.StdoutPipe()
-	if err != nil {
-		errorC <- err
-		return
-	}
-	stdErr, err := cmd.StderrPipe()
-	if err != nil {
-		errorC <- err
-		return
-	}
-	if err := cmd.Start(); err != nil {
-		errorC <- err
-		return
-	}
-	go listenAndKill(cmd, killOn, stdOut, stdErr, outputC, errorC)
-}
-
-func listenAndKill(
-	cmd *exec.Cmd, killOn []byte, stdOut, stdErr io.Reader,
-	outputC chan []byte, errC chan error) {
-
+func listenAndKill(command watchedCommand) {
 	ctx, cancel := context.WithCancel(context.Background())
-	stdOutBuf := bufio.NewReader(stdOut)
-	stdErrBuf := bufio.NewReader(stdErr)
-
 	go func() {
 		for {
-			readFrom(ctx, cancel, stdOutBuf, errC, outputC, cmd, killOn)
+			readFrom(ctx, cancel, bufio.NewReader(command.stdOut), command)
 		}
 	}()
 	go func() {
 		for {
-			readFrom(ctx, cancel, stdErrBuf, errC, outputC, cmd, killOn)
+			readFrom(ctx, cancel, bufio.NewReader(command.stdErr), command)
 		}
 	}()
-
 }
 
-func readFrom(ctx context.Context, cancel context.CancelFunc,
-	r *bufio.Reader, errC chan error, outputC chan []byte,
-	cmd *exec.Cmd, killOn []byte) {
+// listens to the context waiting for the other copy reading the other pipe
+// to cancel the context, otherwise reads from the pipe and sends the output
+func readFrom(ctx context.Context, cancel context.CancelFunc, r *bufio.Reader,
+	command watchedCommand) {
 	select {
 	case <-ctx.Done():
 		return
 	default:
 		line, _, err := r.ReadLine()
 		if err != nil {
-			errC <- err
+			command.errorC <- err
 			return
 		}
 
-		outputC <- line
+		command.combOutC <- line
 
-		if bytes.Contains(bytes.ToLower(line), bytes.ToLower(killOn)) {
-			outputC <- []byte("Listener found string, sending kill signal")
-			if err := cmd.Process.Kill(); err != nil {
-				errC <- err
+		if bytes.Contains(bytes.ToLower(line), bytes.ToLower(command.killOn)) {
+			command.combOutC <- []byte("Found string, sending kill signal")
+			if err := command.cmd.Process.Kill(); err != nil {
+				command.errorC <- err
 			}
 			cancel()
-			close(outputC)
+			close(command.combOutC)
 		}
 	}
 }
 
 var errGaveUsage = fmt.Errorf("gave usage, exiting")
 
-func parseArgs() ([]byte, []string, error) {
-	var killOn string
-	var command []string
+func newWatchedCommand() (watchedCommand, error) {
+	wc := watchedCommand{
+		combOutC: make(chan []byte),
+		errorC:   make(chan error),
+	}
+
 	for i := 0; i < len(os.Args); i++ {
 		switch strings.ToLower(os.Args[i]) {
 		case "-help", "-h":
 			fmt.Println(`Usage: babysitter [options] -- command [args]
 			-k, --kill_on <string>  String to kill on
 			-h, --help              Show this help`)
-			return nil, nil, errGaveUsage
+			return wc, errGaveUsage
 		case "-kill_on", "-k":
-			killOn = os.Args[i+1]
+			wc.killOn = []byte(os.Args[i+1])
 			i++
 		case "--":
-			command = os.Args[i+1:]
-			return []byte(killOn), command, nil
+			wc.cmdStrs = os.Args[i+1:]
 		}
 	}
-	if len(killOn) == 0 {
-		return nil, nil, fmt.Errorf("no kill_on specified")
+	if len(wc.killOn) == 0 {
+		return wc, fmt.Errorf("no kill_on specified")
 	}
-	return nil, nil, fmt.Errorf("no command specified")
+	if len(wc.cmdStrs) == 0 {
+		return wc, fmt.Errorf("no command specified")
+	}
+
+	//nolint: gosec // this tool is run locally, not a security risk
+	wc.cmd = exec.Command(wc.cmdStrs[0], wc.cmdStrs[1:]...)
+	stdOut, err := wc.cmd.StdoutPipe()
+	if err != nil {
+		return wc, err
+	}
+	stdErr, err := wc.cmd.StderrPipe()
+	if err != nil {
+		return wc, err
+	}
+	wc.stdOut = stdOut
+	wc.stdErr = stdErr
+	if err := wc.cmd.Start(); err != nil {
+		return wc, err
+	}
+
+	return wc, nil
 }
