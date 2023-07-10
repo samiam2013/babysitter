@@ -24,13 +24,13 @@ type watchedCommand struct {
 
 func main() {
 	command, err := newWatchedCommand()
-	if err == errGaveUsage {
-		return
-	}
 	if err != nil {
 		log.Fatal(err)
 	}
 
+	if err := command.start(); err != nil {
+		log.Fatal(err)
+	}
 	go listenAndKill(command)
 
 	for {
@@ -88,50 +88,54 @@ func readFrom(ctx context.Context, cancel context.CancelFunc, r *bufio.Reader,
 	}
 }
 
-var errGaveUsage = fmt.Errorf("gave usage, exiting")
-
-func newWatchedCommand() (watchedCommand, error) {
-	wc := watchedCommand{
-		combOutC: make(chan []byte),
-		errorC:   make(chan error),
-	}
-
+func newWatchedCommand() (wc watchedCommand, err error) {
+	var killOn []byte
+	var cmdStrs []string
 	for i := 0; i < len(os.Args); i++ {
 		switch strings.ToLower(os.Args[i]) {
 		case "-help", "-h":
 			fmt.Println(`Usage: babysitter [options] -- command [args]
 			-k, --kill_on <string>  String to kill on
 			-h, --help              Show this help`)
-			return wc, errGaveUsage
+			os.Exit(1)
 		case "-kill_on", "-k":
-			wc.killOn = []byte(os.Args[i+1])
+			killOn = []byte(os.Args[i+1])
 			i++
 		case "--":
-			wc.cmdStrs = os.Args[i+1:]
+			cmdStrs = os.Args[i+1:]
 		}
 	}
-	if len(wc.killOn) == 0 {
+	if len(killOn) == 0 {
 		return wc, fmt.Errorf("no kill_on specified")
 	}
-	if len(wc.cmdStrs) == 0 {
+	if len(cmdStrs) == 0 {
 		return wc, fmt.Errorf("no command specified")
 	}
 
 	//nolint: gosec // this tool is run locally, not a security risk
-	wc.cmd = exec.Command(wc.cmdStrs[0], wc.cmdStrs[1:]...)
-	stdOut, err := wc.cmd.StdoutPipe()
+	cmd := exec.Command(cmdStrs[0], cmdStrs[1:]...)
+	stdOut, err := cmd.StdoutPipe()
 	if err != nil {
-		return wc, err
+		return
 	}
-	stdErr, err := wc.cmd.StderrPipe()
+	stdErr, err := cmd.StderrPipe()
 	if err != nil {
-		return wc, err
-	}
-	wc.stdOut = stdOut
-	wc.stdErr = stdErr
-	if err := wc.cmd.Start(); err != nil {
-		return wc, err
+		return
 	}
 
-	return wc, nil
+	wc = watchedCommand{
+		combOutC: make(chan []byte),
+		errorC:   make(chan error),
+		stdOut:   stdOut,
+		stdErr:   stdErr,
+		cmdStrs:  cmdStrs,
+		cmd:      cmd,
+		killOn:   killOn,
+	}
+
+	return
+}
+
+func (wc watchedCommand) start() error {
+	return wc.cmd.Start()
 }
